@@ -18,14 +18,25 @@ from datetime import datetime
 from html import escape
 from collections import Counter
 
+# Category selection uchun
+from categories import select_category_brand
+
+# OpenAI API uchun (ixtiyoriy)
+try:
+    import openai
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+
 
 class ProductUploaderAgent:
     """Avtomatik mahsulot yuklovchi AI agent"""
-    
-    BASE_URL = "https://api.venu.uz/api/v3"
+
+    BASE_URL = "https://theantique.uz/api/v3"
+
     # API_KEY ni environment variable yoki config fayldan olish tavsiya etiladi
-    API_KEY = os.getenv("VENU_API_KEY", "mPzVh43jap7LOAy9bX8TwGdzj2eTxNOBq4DS3xhV7U4P8McxjC")
-    
+    API_KEY = os.getenv("VENU_API_KEY", "XOjOXviWzeiEBdeULDZYRfCKdDk6fMNPjSgKhjLZ")
+
     def __init__(self, email: str, password: str):
         """
         Args:
@@ -44,8 +55,8 @@ class ProductUploaderAgent:
         url = f"{self.BASE_URL}/seller/auth/login"
         headers = {
             "accept-encoding": "gzip",
-            "authorization": f"Bearer {self.API_KEY}",
             "content-type": "application/json; charset=UTF-8",
+            "authorization": f"Bearer {self.API_KEY}",
             "user-agent": "Python/requests"
         }
         data = {
@@ -144,58 +155,27 @@ class ProductUploaderAgent:
             print(f"❌ Atributlarni olishda xato: {str(e)}")
             return []
     
-    def find_category_by_keywords(self, description: str, name: str) -> Optional[Dict]:
-        """Tavsif va nomdan kategoriyani topish"""
-        # HTML taglarini olib tashlash kategoriya topish uchun
+    def _extract_brand_name(self, description: str, name: str) -> str:
+        """Tavsif va nomdan brend nomini ajratish (categories.py uchun)"""
+        # HTML taglarini olib tashlash
         plain_text = re.sub(r'<[^>]+>', '', description)
         text = (plain_text + " " + name).lower()
         
-        # Kalit so'zlar va kategoriya mapping
-        category_keywords = {
-            "smartfon": ["smartfon", "telefon", "phone", "mobile"],
-            "noutbuk": ["noutbuk", "laptop", "notebook"],
-            "kompyuter": ["kompyuter", "computer", "pc"],
-            "planshet": ["planshet", "tablet", "планшет"],
-            "monitor": ["monitor", "экран", "дисплей"],
-            "klaviatura": ["klaviatura", "keyboard", "клавиатура"],
-            "mush": ["mush", "mouse", "мышь"],
-            "naushnik": ["naushnik", "headphone", "наушник"],
-            "kamera": ["kamera", "camera", "камера"],
-            "router": ["router", "маршрутизатор", "роутер"],
-            "televizor": ["televizor", "tv", "телевизор"],
-            "kreslo": ["kreslo", "chair", "кресло"],
-            "blok": ["blok", "block", "блок"],
-            "pamyat": ["pamyat", "memory", "память", "ram"],
-            "disk": ["disk", "hard", "жесткий", "ssd", "hdd"],
-        }
+        # Mashhur brendlar ro'yxati
+        brand_names = [
+            "samsung", "apple", "iphone", "xiaomi", "huawei", "oppo", "vivo",
+            "asus", "acer", "hp", "lenovo", "dell", "msi", "gigabyte",
+            "sony", "lg", "nokia", "motorola", "realme", "oneplus",
+            "redmi", "honor", "poco", "zte", "meizu"
+        ]
         
-        best_match = None
-        best_score = 0
+        # Matndan brend nomini topish
+        for brand in brand_names:
+            if brand in text:
+                return brand
         
-        def search_in_category(cat, score=0):
-            nonlocal best_match, best_score
-            
-            cat_name = cat.get("name", "").lower()
-            cat_slug = cat.get("slug", "").lower()
-            
-            # Kategoriya nomida kalit so'zlar qidirish
-            for keyword, variants in category_keywords.items():
-                for variant in variants:
-                    if variant in cat_name or variant in cat_slug or variant in text:
-                        score += 1
-            
-            if score > best_score:
-                best_score = score
-                best_match = cat
-            
-            # Sub-kategoriyalarni qidirish
-            for child in cat.get("childes", []):
-                search_in_category(child, score)
-        
-        for category in self.categories:
-            search_in_category(category)
-        
-        return best_match
+        # Agar brend topilmasa, bo'sh qator qaytarish
+        return ""
     
     def find_brand_by_name(self, description: str, name: str) -> Optional[int]:
         """Tavsif va nomdan brendni topish"""
@@ -292,6 +272,123 @@ class ProductUploaderAgent:
         name = name[0].upper() + name[1:] if len(name) > 1 else name.upper()
         
         return name
+    
+    def generate_tags_for_product(self, description: str, product_name: Optional[str] = None) -> List[str]:
+        """
+        Mahsulot uchun AI yordamida teglar (tags) generatsiya qilish.
+        
+        Args:
+            description: Mahsulot tavsifi (HTML bo'lishi mumkin)
+            product_name: Mahsulot nomi (ixtiyoriy)
+        
+        Returns:
+            List[str]: Teglar ro'yxati
+        """
+        # Tavsifni tozalash (plain text)
+        plain_text = self.strip_html_tags(description)
+        
+        # OpenAI API mavjudligini tekshirish
+        openai_api_key = os.getenv("OPENAI_API_KEY")
+        
+        if OPENAI_AVAILABLE and openai_api_key:
+            try:
+                client = openai.OpenAI(api_key=openai_api_key)
+                
+                base_info = product_name or ""
+                prompt = f"""Siz SEO bo'yicha mutaxassis bo'lgan yordamchisiz.
+
+Sizga mahsulot haqida ma'lumot beriladi (nomi va tavsifi).
+Vazifangiz: ushbu mahsulot uchun 5–12 ta kalit so'z (tag) generatsiya qilish.
+
+Qoidalar:
+1. Faqat bitta JSON massivi ko'rinishida javob qaytaring, masalan:
+   ["tag1", "tag2", "tag3"]
+2. Har bir teg:
+   - qisqa bo'lsin (1–3 so'z)
+   - kichik harflarda bo'lsin
+   - '#' belgisiz bo'lsin
+3. Teglar asosan rus tilida bo'lsin. Agar matn boshqa tilda bo'lsa, moslashtirib ruschaga yaqin variantlarini yozing.
+4. Brend, kategoriya, material, uslub va asosiy xususiyatlarga e'tibor bering.
+
+Mahsulot nomi: {base_info}
+Mahsulot tavsifi:
+{plain_text}
+
+Faqat JSON massivini qaytaring."""
+                
+                response = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": "Siz tajribali SEO mutaxassisisiz. Faqat haqiqiy JSON massiv qaytaring."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.4,
+                    max_tokens=400
+                )
+                
+                content = response.choices[0].message.content.strip()
+                
+                # ```json bilan o'ralgan bo'lsa, tozalash
+                content = re.sub(r'```json\s*', '', content, flags=re.IGNORECASE)
+                content = re.sub(r'```\s*$', '', content).strip()
+                
+                tags = json.loads(content)
+                if isinstance(tags, list):
+                    # Har bir elementni stringga aylantirish va tozalash
+                    clean_tags = []
+                    for t in tags:
+                        if not isinstance(t, str):
+                            t = str(t)
+                        t = t.strip().lower()
+                        t = t.lstrip('#')
+                        if t:
+                            clean_tags.append(t)
+                    # Dublikatlarni olib tashlash va bo'sh bo'lmasligini tekshirish
+                    unique_tags = list(dict.fromkeys(clean_tags))
+                    if unique_tags:
+                        return unique_tags
+            except Exception as e:
+                print(f"⚠️ AI orqali tag generatsiya qilishda xato: {str(e)}. Heuristik usulga o'tiladi...")
+        
+        # Agar AI ishlamasa yoki natija noto'g'ri bo'lsa – heuristik yondashuv
+        text = plain_text.lower()
+        # So'zlarni ajratish
+        words = re.findall(r'\b\w{3,}\b', text)
+        
+        # Stop-so'zlar (ru + uz aralash)
+        stop_words = {
+            'и', 'в', 'на', 'с', 'для', 'от', 'до', 'по', 'при', 'над', 'под',
+            'это', 'этот', 'эта', 'эти', 'также', 'как', 'что', 'то', 'же',
+            'bu', 'va', 'uchun', 'bilan', 'ham', 'yoki', 'lekin', 'agar',
+            'qilib', 'qilish', 'qiladi', 'bo\'ladi', 'bo\'lishi', 'kerak',
+            'xususiyatlar', 'ma\'lumotlar', 'qo\'shimcha', 'asosiy'
+        }
+        
+        keywords = [w for w in words if w not in stop_words and len(w) > 3]
+        
+        # Eng ko'p uchraydigan so'zlardan 5–10 tasini olish
+        if keywords:
+            freq = Counter(keywords)
+            common = [word for word, _ in freq.most_common(10)]
+        else:
+            common = []
+        
+        # Mahsulot nomidan ham so'zlar qo'shish
+        if product_name:
+            name_words = re.findall(r'\b\w{3,}\b', product_name.lower())
+            for w in name_words:
+                if w not in stop_words and w not in common:
+                    common.append(w)
+        
+        # Takroriy so'zlarni olib tashlash
+        unique = list(dict.fromkeys(common))
+        
+        # Juda kam bo'lsa, default taglar qo'shish
+        if not unique:
+            unique = ['produkt', 'tovar']
+        
+        # 12 tadan oshirmaslik
+        return unique[:12]
     
     def generate_meta_title(self, description: str, product_name: str = None) -> str:
         """
@@ -526,11 +623,7 @@ class ProductUploaderAgent:
         # Agar HTML bo'lmasa, oddiy text sifatida qaytarish
         if not re.search(r'<[^>]+>', html_content):
             return html_content
-        
-        # Xavfsiz HTML taglarini saqlash
-        # Barcha ruxsat etilgan taglarni saqlash
-        pattern = r'<(/?)(' + '|'.join(allowed_tags) + r')(\s[^>]*)?>'
-        
+
         # Ruxsat etilgan taglarni saqlash
         cleaned = re.sub(
             r'<(?!\/?(?:' + '|'.join(allowed_tags) + r')(?:\s|>))[^>]+>',
@@ -555,6 +648,177 @@ class ProductUploaderAgent:
         text = text.replace('&quot;', '"')
         text = text.replace('&#39;', "'")
         return text.strip()
+    
+    def convert_text_to_html_with_ai(self, plain_text: str) -> str:
+        """
+        AI yordamida oddiy matnni chiroyli HTML formatiga o'tkazish
+        
+        Args:
+            plain_text: Oddiy matn tavsifi
+        
+        Returns:
+            str: HTML formatidagi tavsif
+        """
+        # Agar matn allaqachon HTML bo'lsa, o'zgartirmaydi
+        if re.search(r'<[^>]+>', plain_text):
+            return plain_text
+        
+        # OpenAI API mavjudligini tekshirish
+        openai_api_key = os.getenv("OPENAI_API_KEY")
+        
+        if OPENAI_AVAILABLE and openai_api_key:
+            try:
+                # OpenAI client yaratish
+                client = openai.OpenAI(api_key=openai_api_key)
+                
+                # Prompt yaratish
+                prompt = f"""Sizga mahsulot tavsifi berilgan. Uni chiroyli HTML formatiga o'tkazing.
+
+Qoidalar:
+1. Faqat quyidagi HTML taglaridan foydalaning: h1, h2, h3, h4, h5, h6, p, b, strong, i, em, u, ul, ol, li, br, div, span
+2. Emoji bilan boshlangan qatorlarni sarlavha (h2 yoki h3) yoki ro'yxat elementi (li) sifatida formatlang
+3. ":" bilan tugagan qisqa qatorlarni sarlavha (h3) sifatida formatlang
+4. Oddiy matnlarni paragraf (p) taglari bilan o'rab oling
+5. Ro'yxatlarni ul/ol va li taglari bilan formatlang
+6. Muhim so'zlarni strong yoki b taglari bilan ajrating
+7. Faqat HTML kodini qaytaring, boshqa izohlar bermang
+
+Matn:
+{plain_text}
+
+HTML:"""
+                
+                # OpenAI API chaqiruv
+                response = client.chat.completions.create(
+                    model="gpt-4o-mini",  # yoki "gpt-3.5-turbo"
+                    messages=[
+                        {"role": "system", "content": "Siz HTML formatlovchi mutaxassissiz. Faqat HTML kodini qaytaring."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.3,
+                    max_tokens=2000
+                )
+                
+                html_result = response.choices[0].message.content.strip()
+                
+                # HTML kodini tozalash (faqat HTML qismini olish)
+                # Agar ```html yoki ``` bilan o'ralgan bo'lsa, olib tashlash
+                html_result = re.sub(r'```html\s*', '', html_result)
+                html_result = re.sub(r'```\s*$', '', html_result)
+                html_result = html_result.strip()
+                
+                # Tozalash va tekshirish
+                cleaned_html = self.clean_html_description(html_result)
+                print("🤖 AI yordamida HTML formatiga o'tkazildi")
+                return cleaned_html
+                
+            except Exception as e:
+                print(f"⚠️ AI API xatosi: {str(e)}. Oddiy formatlashdan foydalanilmoqda...")
+                # Xato bo'lsa, oddiy formatlashga o'tish
+                return self._convert_text_to_html_simple(plain_text)
+        else:
+            # OpenAI mavjud emas yoki API key yo'q, oddiy formatlashdan foydalanish
+            return self._convert_text_to_html_simple(plain_text)
+    
+    def _convert_text_to_html_simple(self, plain_text: str) -> str:
+        """
+        Oddiy matnni HTML formatiga o'tkazish (AI bo'lmasa)
+        Bu funksiya rule-based yondashuvdan foydalanadi
+        """
+        lines = plain_text.split('\n')
+        html_parts = []
+        in_list = False
+        in_paragraph = False
+        current_paragraph = []
+        heading_count = 0
+        
+        # Emoji pattern
+        emoji_pattern = re.compile(
+            r'^[\U0001F300-\U0001F9FF\U00002600-\U000027BF\U0001F600-\U0001F64F'
+            r'\U0001F680-\U0001F6FF\U0001F1E0-\U0001F1FF\U00002702-\U000027B0'
+            r'\U000024C2-\U0001F251]'
+        )
+        
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
+            
+            # Bo'sh qator
+            if not line:
+                if in_paragraph and current_paragraph:
+                    html_parts.append(f"<p>{' '.join(current_paragraph)}</p>")
+                    current_paragraph = []
+                    in_paragraph = False
+                if in_list:
+                    html_parts.append("</ul>")
+                    in_list = False
+                i += 1
+                continue
+            
+            # Emoji bilan boshlanadigan qatorlar
+            if emoji_pattern.match(line):
+                if in_paragraph and current_paragraph:
+                    html_parts.append(f"<p>{' '.join(current_paragraph)}</p>")
+                    current_paragraph = []
+                    in_paragraph = False
+                
+                next_line_empty = (i + 1 >= len(lines) or not lines[i + 1].strip())
+                next_line_emoji = False
+                if i + 1 < len(lines) and lines[i + 1].strip():
+                    next_line_emoji = bool(emoji_pattern.match(lines[i + 1].strip()))
+                
+                text_after_emoji = line[1:].strip() if len(line) > 1 else ""
+                is_list_item = bool(text_after_emoji and not next_line_empty and not next_line_emoji)
+                
+                if next_line_empty or next_line_emoji or not text_after_emoji:
+                    if in_list:
+                        html_parts.append("</ul>")
+                        in_list = False
+                    
+                    heading_count += 1
+                    if heading_count == 1:
+                        html_parts.append(f"<h2>{line}</h2>")
+                    else:
+                        html_parts.append(f"<h3>{line}</h3>")
+                else:
+                    if not in_list:
+                        html_parts.append("<ul>")
+                        in_list = True
+                    html_parts.append(f"<li><strong>{text_after_emoji}</strong></li>")
+            else:
+                # Oddiy matn
+                if line.endswith(':') and len(line) < 60:
+                    if in_paragraph and current_paragraph:
+                        html_parts.append(f"<p>{' '.join(current_paragraph)}</p>")
+                        current_paragraph = []
+                        in_paragraph = False
+                    if in_list:
+                        html_parts.append("</ul>")
+                        in_list = False
+                    heading_count += 1
+                    html_parts.append(f"<h3>{line}</h3>")
+                else:
+                    if not in_paragraph:
+                        in_paragraph = True
+                        current_paragraph = []
+                    current_paragraph.append(line)
+            
+            i += 1
+        
+        # Qolgan paragrafni yopish
+        if in_paragraph and current_paragraph:
+            html_parts.append(f"<p>{' '.join(current_paragraph)}</p>")
+        
+        # Qolgan ro'yxatni yopish
+        if in_list:
+            html_parts.append("</ul>")
+        
+        result = '\n'.join(html_parts)
+        
+        if not result.strip():
+            return f"<p>{plain_text.strip()}</p>"
+        
+        return result
     
     def upload_product(
         self,
@@ -600,37 +864,76 @@ class ProductUploaderAgent:
             name = self.generate_product_name(description)
             print(f"🤖 AI generatsiya qilgan nom: {name}")
         
-        # Kategoriyani topish
-        category = None
-        if category_id:
-            # ID bo'yicha kategoriya topish
-            for cat in self.categories:
-                if str(cat.get("id")) == str(category_id):
-                    category = cat
-                    break
+        # Kategoriya va brendni topish (categories.py funksiyasidan foydalanish)
+        # O'zgaruvchilarni ishga tushirish
+        sub_category_id = ""
+        sub_sub_category_id = ""
+        sub_sub_sub_category_id = ""
+        
+        if not category_id or not brand_id:
+            # Brend nomini ajratish
+            brand_name = self._extract_brand_name(description, name)
+            
+            # categories.py funksiyasidan foydalanish
+            try:
+                selection = select_category_brand(
+                    product_name=name,
+                    brand_name=brand_name,
+                    categories=self.categories,
+                    brands=self.brands
+                )
+                
+                # Agar category_id berilmagan bo'lsa, AI topgan kategoriyadan foydalanish
+                if not category_id:
+                    category_id = selection.category_id
+                    sub_category_id = selection.sub_category_id or ""
+                    sub_sub_category_id = selection.sub_sub_category_id or ""
+                    sub_sub_sub_category_id = selection.sub_sub_sub_category_id or ""
+                    
+                    if selection.category:
+                        print(f"🤖 AI topgan kategoriya: {selection.category}")
+                    if selection.sub_category:
+                        print(f"🤖 AI topgan sub-kategoriya: {selection.sub_category}")
+                    if selection.sub_sub_category:
+                        print(f"🤖 AI topgan sub-sub-kategoriya: {selection.sub_sub_category}")
+                
+                # Agar brand_id berilmagan bo'lsa, AI topgan brenddan foydalanish
+                if not brand_id:
+                    brand_id = selection.brand_id
+                    print(f"🤖 AI topgan brend ID: {brand_id}")
+            except Exception as e:
+                print(f"⚠️ Kategoriya/brend tanlashda xato: {str(e)}")
+                # Fallback: agar xato bo'lsa, eski usulga o'tish
+                if not category_id:
+                    if self.categories:
+                        category_id = str(self.categories[0].get("id", "0"))
+                        sub_category_id = ""
+                        sub_sub_category_id = ""
+                        sub_sub_sub_category_id = ""
+                    else:
+                        return {"success": False, "error": "Kategoriya topilmadi"}
+                if not brand_id:
+                    if self.brands:
+                        brand_id = self.brands[0].get("id", 1)
+                    else:
+                        brand_id = 1
         else:
-            # Avtomatik kategoriya topish
-            category = self.find_category_by_keywords(description, name)
-        
-        if not category:
-            # Agar kategoriya topilmasa, birinchi kategoriyani olish
-            if self.categories:
-                category = self.categories[0]
-            else:
-                return {"success": False, "error": "Kategoriya topilmadi"}
-        
-        category_id, sub_category_id, sub_sub_category_id = self.extract_category_ids(category)
-        
-        # Brendni topish
-        if not brand_id:
-            brand_id = self.find_brand_by_name(description, name)
-        
-        if not brand_id:
-            # Agar brend topilmasa, birinchi brendni olish
-            if self.brands:
-                brand_id = self.brands[0].get("id")
-            else:
-                brand_id = 1  # Default brend
+            # Agar category_id va brand_id berilgan bo'lsa, extract_category_ids dan foydalanish
+            if category_id:
+                # ID bo'yicha kategoriyani topish va sub-kategoriyalarni olish
+                category = None
+                for cat in self.categories:
+                    if str(cat.get("id")) == str(category_id):
+                        category = cat
+                        break
+                
+                if category:
+                    category_id, sub_category_id, sub_sub_category_id = self.extract_category_ids(category)
+                    sub_sub_sub_category_id = ""
+                else:
+                    sub_category_id = ""
+                    sub_sub_category_id = ""
+                    sub_sub_sub_category_id = ""
         
         # Rasm yuklash
         print("📤 Rasm yuklanmoqda...")
@@ -643,7 +946,7 @@ class ProductUploaderAgent:
         
         # Asosiy rasm (bir xil rasmni qayta yuklash shart emas, lekin agar kerak bo'lsa)
         # Ko'pincha bir xil rasm nomi qaytariladi
-        main_image_name = self.upload_image(image_path, "main")
+        main_image_name = self.upload_image(image_path, "product")
         if not main_image_name:
             main_image_name = thumbnail_name
         
@@ -653,14 +956,26 @@ class ProductUploaderAgent:
             "storage": "public"
         }]
         
-        # Description'ni HTML formatida tozalash
-        html_description = self.clean_html_description(description)
+        # Description'ni HTML formatiga o'tkazish (agar oddiy matn bo'lsa)
+        # Agar allaqachon HTML bo'lsa, faqat tozalash
+        if re.search(r'<[^>]+>', description):
+            # HTML allaqachon mavjud, faqat tozalash
+            html_description = self.clean_html_description(description)
+        else:
+            # Oddiy matn, AI yordamida HTML formatiga o'tkazish
+            print("🤖 Oddiy matnni HTML formatiga o'tkazish...")
+            html_description = self.convert_text_to_html_with_ai(description)
+            html_description = self.clean_html_description(html_description)
         
         # Meta description uchun HTML taglarini olib tashlash
         plain_description = self.strip_html_tags(description)
         
         # Meta title ni AI yordamida generatsiya qilish
         meta_title = self.generate_meta_title(description, name)
+        
+        # Taglarni AI (yoki heuristika) yordamida generatsiya qilish
+        tags = self.generate_tags_for_product(description, name)
+        print(f"🤖 Generatsiya qilingan taglar: {tags}")
         print(f"🤖 AI generatsiya qilgan meta title: {meta_title}")
         
         # Mahsulot ma'lumotlarini tayyorlash
@@ -672,7 +987,6 @@ class ProductUploaderAgent:
             "discount_type": discount_type,
             "tax_ids": "[]",
             "tax_model": "exclude",
-            "category_id": category_id,
             "unit": "pc",
             "brand_id": brand_id,
             "meta_title": meta_title,
@@ -692,7 +1006,7 @@ class ProductUploaderAgent:
             "product_type": "physical",
             "digital_product_type": "ready_after_sell",
             "digital_file_ready": "",
-            "tags": json.dumps(["tag", "product"], ensure_ascii=False),
+            "tags": json.dumps(tags, ensure_ascii=False),
             "publishing_house": "[]",
             "authors": "[]",
             "color_image": "[]",
@@ -707,22 +1021,11 @@ class ProductUploaderAgent:
             "meta_max_video_preview_value": None,
             "meta_max_image_preview": "0",
             "meta_max_image_preview_value": "large",
-            "sub_category_id": sub_category_id if sub_category_id else category_id,
-            "sub_sub_category_id": sub_sub_category_id if sub_sub_category_id else (sub_category_id if sub_category_id else category_id),
             "tax": "0",
-
-            # Remove in feature
-            "weight": 0.0,
-            "height": 0.0,
-            "width": 0.0,
-            "length": 0.0,
-            
-            "package_code": "121212",
-            "mxik":"121212",
-
-            "is_install":False,
-            "is_seasonal":False,
-            "is_discount":False,
+            "category_id": category_id,
+            "sub_category_id": sub_category_id or "",
+            "sub_sub_category_id": sub_sub_category_id or "",
+            "sub_sub_sub_category_id": sub_sub_sub_category_id or "",
         }
         
         # Mahsulot yaratish

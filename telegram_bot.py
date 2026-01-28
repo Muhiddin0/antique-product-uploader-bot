@@ -305,7 +305,7 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
 
 async def handle_description(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Tavsif qabul qilish va HTML bilan boyitish"""
+    """Tavsif qabul qilish va AI yordamida HTML bilan boyitish"""
     user_id = update.effective_user.id
     description = update.message.text.strip()
     
@@ -315,18 +315,41 @@ async def handle_description(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         return WAITING_DESCRIPTION
     
-    # Oddiy matnni HTML bilan boyitish
-    enriched_description = enrich_text_with_html(description)
-    
     user_data_dict = get_user_data(user_id)
-    user_data_dict['description'] = enriched_description
     
-    await update.message.reply_text(
-        "✅ Tavsif qabul qilindi va HTML taglar bilan boyitildi!\n\n"
-        "Endi mahsulot narxini yuboring (dollarda, faqat raqam):\n"
-        "Masalan: 100 yoki 100.50"
-    )
-    return WAITING_PRICE
+    # Agent mavjudligini tekshirish
+    if not user_data_dict.get('agent'):
+        await update.message.reply_text(
+            "❌ Agent topilmadi. Qaytadan /start buyrug'ini yuboring."
+        )
+        return ConversationHandler.END
+    
+    # AI yordamida oddiy matnni HTML formatiga o'tkazish
+    await update.message.reply_text("🤖 AI yordamida tavsifni HTML formatiga o'tkazilmoqda...")
+    
+    try:
+        agent = user_data_dict['agent']
+        enriched_description = agent.convert_text_to_html_with_ai(description)
+        user_data_dict['description'] = enriched_description
+        
+        await update.message.reply_text(
+            "✅ Tavsif qabul qilindi va AI yordamida HTML taglar bilan chiroyli ko'rinishga keltirildi!\n\n"
+            "Endi mahsulot narxini yuboring (dollarda, faqat raqam):\n"
+            "Masalan: 100 yoki 100.50"
+        )
+        return WAITING_PRICE
+    except Exception as e:
+        logger.error(f"Tavsifni HTML formatiga o'tkazishda xato: {str(e)}")
+        # Xato bo'lsa, oddiy formatlashdan foydalanish
+        enriched_description = enrich_text_with_html(description)
+        user_data_dict['description'] = enriched_description
+        
+        await update.message.reply_text(
+            "✅ Tavsif qabul qilindi va HTML taglar bilan boyitildi!\n\n"
+            "Endi mahsulot narxini yuboring (dollarda, faqat raqam):\n"
+            "Masalan: 100 yoki 100.50"
+        )
+        return WAITING_PRICE
 
 
 async def handle_price(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
