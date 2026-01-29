@@ -165,7 +165,7 @@ def get_user_data(user_id: int) -> Dict:
             'agent': None,
             'email': None,
             'password': None,
-            'image_path': None,
+            'image_paths': [],  # Bir nechta rasm uchun list
             'description': None,
             'price': None,
             'stock': 1,
@@ -183,7 +183,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_data_dict['agent'] = None
     user_data_dict['email'] = None
     user_data_dict['password'] = None
-    user_data_dict['image_path'] = None
+    user_data_dict['image_paths'] = []
     user_data_dict['description'] = None
     user_data_dict['price'] = None
     user_data_dict['stock'] = 1
@@ -239,9 +239,16 @@ async def handle_password(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             agent.get_categories()
             agent.get_brands()
             
+            keyboard = [
+                [InlineKeyboardButton("✅ Rasmlarni tugatish", callback_data='finish_images')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
             await update.message.reply_text(
                 "✅ Muvaffaqiyatli login qilindi!\n\n"
-                "Endi mahsulot rasmini yuboring (rasm fayl sifatida):"
+                "Endi mahsulot rasmlarini yuboring (bir nechta rasm yuborishingiz mumkin):\n"
+                "Rasmlarni yuborib, keyin 'Rasmlarni tugatish' tugmasini bosing.",
+                reply_markup=reply_markup
             )
             return WAITING_IMAGE
         else:
@@ -260,20 +267,53 @@ async def handle_password(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Rasm qabul qilish"""
+    """Rasm qabul qilish (bir nechta rasm)"""
     user_id = update.effective_user.id
     user_data_dict = get_user_data(user_id)
+    
+    # Agar callback query bo'lsa (finish_images button)
+    if update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        
+        # Hech bo'lmaganda bitta rasm bo'lishi kerak
+        if not user_data_dict.get('image_paths') or len(user_data_dict['image_paths']) == 0:
+            await query.edit_message_text(
+                "❌ Hech bo'lmaganda bitta rasm yuborishingiz kerak!\n\n"
+                "Iltimos, rasm yuboring:"
+            )
+            return WAITING_IMAGE
+        
+        # Rasmlar tugatildi, tavsifga o'tish
+        keyboard = [
+            [InlineKeyboardButton("✅ Rasmlarni tugatish", callback_data='finish_images')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            f"✅ {len(user_data_dict['image_paths'])} ta rasm qabul qilindi!\n\n"
+            "Endi mahsulot tavsifini yuboring (HTML formatida yoki oddiy matn):"
+        )
+        return WAITING_DESCRIPTION
     
     # Rasm faylini olish
     if update.message.photo:
         # Eng katta rasmni olish
         photo = update.message.photo[-1]
         file = await context.bot.get_file(photo.file_id)
+        file_id = photo.file_id
     elif update.message.document:
         file = await context.bot.get_file(update.message.document.file_id)
+        file_id = update.message.document.file_id
     else:
+        keyboard = [
+            [InlineKeyboardButton("✅ Rasmlarni tugatish", callback_data='finish_images')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
         await update.message.reply_text(
-            "❌ Iltimos, rasm faylini yuboring (rasm yoki fayl sifatida):"
+            "❌ Iltimos, rasm faylini yuboring (rasm yoki fayl sifatida):",
+            reply_markup=reply_markup
         )
         return WAITING_IMAGE
     
@@ -284,22 +324,38 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         
         # Fayl nomini generatsiya qilish
         file_extension = os.path.splitext(file.file_path or 'image.jpg')[1] or '.jpg'
-        image_filename = f"temp_images/{user_id}_{photo.file_id if update.message.photo else update.message.document.file_id}{file_extension}"
+        image_filename = f"temp_images/{user_id}_{file_id}{file_extension}"
         
         # Rasmni yuklab olish
         await file.download_to_drive(image_filename)
-        user_data_dict['image_path'] = image_filename
+        
+        # Rasmlar ro'yxatiga qo'shish
+        if 'image_paths' not in user_data_dict:
+            user_data_dict['image_paths'] = []
+        user_data_dict['image_paths'].append(image_filename)
+        
+        keyboard = [
+            [InlineKeyboardButton("✅ Rasmlarni tugatish", callback_data='finish_images')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
         
         await update.message.reply_text(
-            "✅ Rasm qabul qilindi!\n\n"
-            "Endi mahsulot tavsifini yuboring (HTML formatida yoki oddiy matn):"
+            f"✅ Rasm qabul qilindi! (Jami: {len(user_data_dict['image_paths'])} ta rasm)\n\n"
+            "Yana rasm yuborishingiz yoki 'Rasmlarni tugatish' tugmasini bosing:",
+            reply_markup=reply_markup
         )
-        return WAITING_DESCRIPTION
+        return WAITING_IMAGE
     except Exception as e:
         logger.error(f"Rasm yuklash xatosi: {str(e)}")
+        keyboard = [
+            [InlineKeyboardButton("✅ Rasmlarni tugatish", callback_data='finish_images')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
         await update.message.reply_text(
             f"❌ Rasm yuklashda xato: {str(e)}\n\n"
-            "Qaytadan rasm yuboring:"
+            "Qaytadan rasm yuboring:",
+            reply_markup=reply_markup
         )
         return WAITING_IMAGE
 
@@ -428,16 +484,17 @@ async def handle_discount(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         agent = user_data_dict['agent']
         result = agent.upload_product(
             description=user_data_dict['description'],
-            image_path=user_data_dict['image_path'],
+            image_paths=user_data_dict['image_paths'],
             price=user_data_dict['price'],
             stock=user_data_dict['stock'],
             discount=user_data_dict['discount']
         )
         
-        # Temp rasmni o'chirish
+        # Temp rasmlarni o'chirish
         try:
-            if os.path.exists(user_data_dict['image_path']):
-                os.remove(user_data_dict['image_path'])
+            for image_path in user_data_dict.get('image_paths', []):
+                if os.path.exists(image_path):
+                    os.remove(image_path)
         except:
             pass
         
@@ -487,15 +544,22 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         # Yana yangi mahsulot qo'shish
         user_data_dict = get_user_data(user_id)
         # Agent va email/password saqlanadi, faqat mahsulot ma'lumotlarini tozalash
-        user_data_dict['image_path'] = None
+        user_data_dict['image_paths'] = []
         user_data_dict['description'] = None
         user_data_dict['price'] = None
         user_data_dict['stock'] = 1
         user_data_dict['discount'] = 0.0
         
+        keyboard = [
+            [InlineKeyboardButton("✅ Rasmlarni tugatish", callback_data='finish_images')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
         await query.edit_message_text(
             "✅ Yana yangi mahsulot qo'shish!\n\n"
-            "Mahsulot rasmini yuboring (rasm fayl sifatida):"
+            "Mahsulot rasmlarini yuboring (bir nechta rasm yuborishingiz mumkin):\n"
+            "Rasmlarni yuborib, keyin 'Rasmlarni tugatish' tugmasini bosing.",
+            reply_markup=reply_markup
         )
         return WAITING_IMAGE
     
@@ -506,7 +570,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         user_data_dict['agent'] = None
         user_data_dict['email'] = None
         user_data_dict['password'] = None
-        user_data_dict['image_path'] = None
+        user_data_dict['image_paths'] = []
         user_data_dict['description'] = None
         user_data_dict['price'] = None
         user_data_dict['stock'] = 1
@@ -530,16 +594,17 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             agent = user_data_dict['agent']
             result = agent.upload_product(
                 description=user_data_dict['description'],
-                image_path=user_data_dict['image_path'],
+                image_paths=user_data_dict['image_paths'],
                 price=user_data_dict['price'],
                 stock=user_data_dict['stock'],
                 discount=user_data_dict['discount']
             )
             
-            # Temp rasmni o'chirish
+            # Temp rasmlarni o'chirish
             try:
-                if os.path.exists(user_data_dict['image_path']):
-                    os.remove(user_data_dict['image_path'])
+                for image_path in user_data_dict.get('image_paths', []):
+                    if os.path.exists(image_path):
+                        os.remove(image_path)
             except:
                 pass
             
@@ -617,8 +682,7 @@ def main():
             WAITING_PASSWORD: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_password)],
             WAITING_IMAGE: [
                 MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_image),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_image),
-                CallbackQueryHandler(button_callback)
+                CallbackQueryHandler(handle_image)  # finish_images button uchun
             ],
             WAITING_DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_description)],
             WAITING_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_price)],

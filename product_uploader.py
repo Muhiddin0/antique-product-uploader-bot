@@ -208,12 +208,13 @@ class ProductUploaderAgent:
     def generate_product_name(self, description: str) -> str:
         """
         AI yordamida tavsifdan mahsulot nomini generatsiya qilish
+        Qisqa, aniq, chunarli nom - bitta gap, hech qanday "..." lar yo'q
         
         Args:
             description: Mahsulot tavsifi (HTML yoki oddiy matn)
         
         Returns:
-            str: Generatsiya qilingan mahsulot nomi
+            str: Generatsiya qilingan mahsulot nomi (qisqa va aniq)
         """
         # HTML taglarini olib tashlash
         plain_text = self.strip_html_tags(description)
@@ -247,22 +248,28 @@ class ProductUploaderAgent:
             # Eng ko'p ishlatilgan so'zlarni topish (stop words'larni olib tashlash)
             stop_words = {'bu', 'va', 'uchun', 'bilan', 'ham', 'yoki', 'lekin', 'agar', 
                          'qilib', 'qilish', 'qiladi', 'bo\'ladi', 'bo\'lishi', 'kerak',
-                         'xususiyatlar', 'ma\'lumotlar', 'qo\'shimcha', 'asosiy'}
+                         'xususiyatlar', 'ma\'lumotlar', 'qo\'shimcha', 'asosiy', 'the', 'and', 'or',
+                         'with', 'for', 'from', 'this', 'that', 'these', 'those'}
             
             important_words = [w for w in words if w not in stop_words and len(w) > 3]
             
             if important_words:
-                # Eng ko'p ishlatilgan so'zlar
+                # Eng ko'p ishlatilgan so'zlar (maksimal 4 ta so'z - qisqa nom uchun)
                 word_freq = Counter(important_words)
-                top_words = [word for word, _ in word_freq.most_common(3)]
+                top_words = [word for word, _ in word_freq.most_common(4)]
                 first_line_clean = ' '.join(top_words).title()
         
         # Nomni tozalash va formatlash
         name = first_line_clean.strip()
         
-        # Uzunligini cheklash (100 belgi)
-        if len(name) > 100:
-            name = name[:97] + "..."
+        # So'zlarga bo'lish va faqat muhim so'zlarni olish (maksimal 4-5 so'z)
+        words = name.split()
+        if len(words) > 10:
+            # Faqat birinchi 5 ta so'zni olish
+            name = ' '.join(words[:10])
+        
+        # Ko'p bo'shliqlarni bitta bo'shliqqa o'zgartirish
+        name = re.sub(r'\s+', ' ', name).strip()
         
         # Agar hali ham bo'sh bo'lsa
         if not name or len(name) < 3:
@@ -270,6 +277,18 @@ class ProductUploaderAgent:
         
         # Birinchi harfni katta qilish
         name = name[0].upper() + name[1:] if len(name) > 1 else name.upper()
+        
+        # Hech qanday "..." lar bo'lmasligi kerak - agar uzun bo'lsa, so'zlar bo'yicha kesish
+        # Lekin maksimal uzunlikni cheklash (60 belgi - qisqa va aniq)
+        if len(name) > 60:
+            words = name.split()
+            name = ""
+            for word in words:
+                if len(name + " " + word) <= 60:
+                    name += (" " + word if name else word)
+                else:
+                    break
+            name = name.strip()
         
         return name
     
@@ -295,31 +314,31 @@ class ProductUploaderAgent:
                 client = openai.OpenAI(api_key=openai_api_key)
                 
                 base_info = product_name or ""
-                prompt = f"""Siz SEO bo'yicha mutaxassis bo'lgan yordamchisiz.
+                prompt = f"""You are an SEO specialist assistant.
 
-Sizga mahsulot haqida ma'lumot beriladi (nomi va tavsifi).
-Vazifangiz: ushbu mahsulot uchun 5–12 ta kalit so'z (tag) generatsiya qilish.
+You will be given product information (name and description).
+Your task: generate 5–12 keywords (tags) for this product.
 
-Qoidalar:
-1. Faqat bitta JSON massivi ko'rinishida javob qaytaring, masalan:
+Rules:
+1. Return only a single JSON array, for example:
    ["tag1", "tag2", "tag3"]
-2. Har bir teg:
-   - qisqa bo'lsin (1–3 so'z)
-   - kichik harflarda bo'lsin
-   - '#' belgisiz bo'lsin
-3. Teglar asosan rus tilida bo'lsin. Agar matn boshqa tilda bo'lsa, moslashtirib ruschaga yaqin variantlarini yozing.
-4. Brend, kategoriya, material, uslub va asosiy xususiyatlarga e'tibor bering.
+2. Each tag should be:
+   - short (1–3 words)
+   - in lowercase
+   - without '#' symbol
+3. Tags must be in English only. If the text is in another language, translate and adapt to English.
+4. Pay attention to brand, category, material, style, and main features.
 
-Mahsulot nomi: {base_info}
-Mahsulot tavsifi:
+Product name: {base_info}
+Product description:
 {plain_text}
 
-Faqat JSON massivini qaytaring."""
+Return only the JSON array."""
                 
                 response = client.chat.completions.create(
                     model="gpt-4o-mini",
                     messages=[
-                        {"role": "system", "content": "Siz tajribali SEO mutaxassisisiz. Faqat haqiqiy JSON massiv qaytaring."},
+                        {"role": "system", "content": "You are an experienced SEO specialist. Return only a valid JSON array with English tags."},
                         {"role": "user", "content": prompt}
                     ],
                     temperature=0.4,
@@ -385,7 +404,7 @@ Faqat JSON massivini qaytaring."""
         
         # Juda kam bo'lsa, default taglar qo'shish
         if not unique:
-            unique = ['produkt', 'tovar']
+            unique = ['product', 'item']
         
         # 12 tadan oshirmaslik
         return unique[:12]
@@ -479,6 +498,7 @@ Faqat JSON massivini qaytaring."""
     def upload_image(self, image_path: str, image_type: str = "thumbnail") -> Optional[str]:
         """Rasm yuklash"""
         if not self.token:
+            
             print("❌ Avval login qiling!")
             return None
         
@@ -823,8 +843,9 @@ HTML:"""
     def upload_product(
         self,
         description: str,
-        image_path: str,
-        price: float,
+        image_paths: List[str] = None,  # Bir nechta rasm uchun list
+        image_path: str = None,  # Orqaga moslik uchun (eski kodlar uchun)
+        price: float = None,
         name: Optional[str] = None,
         category_id: Optional[str] = None,
         brand_id: Optional[int] = None,
@@ -837,8 +858,9 @@ HTML:"""
         
         Args:
             description: Mahsulot tavsifi
-            image_path: Rasm yo'li
-            price: Narx
+            image_paths: Rasm yo'llari ro'yxati (bir nechta rasm) - yangi usul
+            image_path: Bitta rasm yo'li (orqaga moslik uchun) - eski usul
+            price: Narx (required)
             name: Mahsulot nomi (ixtiyoriy, tavsifdan generatsiya qilinadi)
             category_id: Kategoriya ID (ixtiyoriy, avtomatik topiladi)
             brand_id: Brend ID (ixtiyoriy, avtomatik topiladi)
@@ -849,6 +871,17 @@ HTML:"""
         Returns:
             Dict: Natija
         """
+        # Price tekshirish
+        if price is None:
+            return {"success": False, "error": "Narx kiritilmagan"}
+        
+        # Orqaga moslik: agar image_path berilgan bo'lsa, uni listga aylantirish
+        if image_path and not image_paths:
+            image_paths = [image_path]
+        
+        # Agar image_paths list emas yoki bo'sh bo'lsa, xato
+        if not isinstance(image_paths, list) or len(image_paths) == 0:
+            return {"success": False, "error": "Hech bo'lmaganda bitta rasm kerak"}
         if not self.token:
             if not self.login():
                 return {"success": False, "error": "Login qilishda xato"}
@@ -935,26 +968,62 @@ HTML:"""
                     sub_sub_category_id = ""
                     sub_sub_sub_category_id = ""
         
-        # Rasm yuklash
-        print("📤 Rasm yuklanmoqda...")
-        thumbnail_name = self.upload_image(image_path, "thumbnail")
+        # Barcha rasmlarni yuklash
+        print(f"📤 {len(image_paths)} ta rasm yuklanmoqda...")
+        uploaded_images = []
+        thumbnail_name = None
+        meta_image_name = None
+        
+        for idx, image_path in enumerate(image_paths):
+            if not os.path.exists(image_path):
+                print(f"⚠️ Rasm topilmadi: {image_path}")
+                continue
+            
+            # Birinchi rasmni thumbnail va product sifatida yuklash
+            if idx == 0:
+                # Asosiy rasm sifatida yuklash (product type - images array uchun)
+                # Bu asosiy rasm bo'lib, images array'ida birinchi o'rinda bo'ladi
+                main_image_name = self.upload_image(image_path, "product")
+                if not main_image_name:
+                    return {"success": False, "error": "Birinchi rasm (asosiy rasm) yuklashda xato"}
+                print(f"✅ Asosiy rasm (product) yuklandi: {main_image_name}")
+                uploaded_images.append(main_image_name)
+                
+                # Thumbnail yuklash (birinchi rasm)
+                thumbnail_name = self.upload_image(image_path, "thumbnail")
+                if not thumbnail_name:
+                    # Agar thumbnail yuklanmasa, asosiy rasm nomidan foydalanish
+                    print(f"⚠️ Thumbnail yuklashda xato, asosiy rasm nomidan foydalanilmoqda: {main_image_name}")
+                    thumbnail_name = main_image_name
+                else:
+                    print(f"✅ Thumbnail yuklandi: {thumbnail_name}")
+                
+                # Meta image uchun thumbnail nomidan foydalanish (bir xil rasm)
+                meta_image_name = thumbnail_name
+                print(f"📸 Jami yuklangan rasmlar: {len(uploaded_images)} ta")
+            else:
+                # Qolgan rasmlarni product sifatida yuklash
+                image_name = self.upload_image(image_path, "product")
+                if image_name:
+                    uploaded_images.append(image_name)
+        
+        if not uploaded_images:
+            return {"success": False, "error": "Hech qanday rasm yuklanmadi"}
+        
+        # Thumbnail va meta_image birinchi rasmdan olinadi (agar yuklanmagan bo'lsa)
         if not thumbnail_name:
-            return {"success": False, "error": "Rasm yuklashda xato"}
-        
-        # Meta rasm (thumbnail bilan bir xil)
-        meta_image_name = thumbnail_name
-        
-        # Asosiy rasm (bir xil rasmni qayta yuklash shart emas, lekin agar kerak bo'lsa)
-        # Ko'pincha bir xil rasm nomi qaytariladi
-        main_image_name = self.upload_image(image_path, "product")
-        if not main_image_name:
-            main_image_name = thumbnail_name
+            thumbnail_name = uploaded_images[0]
+        if not meta_image_name:
+            meta_image_name = thumbnail_name  # Meta image uchun thumbnail nomidan foydalanish
         
         # Rasm ma'lumotlarini tayyorlash
-        images_data = [{
-            "image_name": main_image_name,
-            "storage": "public"
-        }]
+        images_data = [
+            {
+                "image_name": img_name,
+                "storage": "public"
+            }
+            for img_name in uploaded_images
+        ]
         
         # Description'ni HTML formatiga o'tkazish (agar oddiy matn bo'lsa)
         # Agar allaqachon HTML bo'lsa, faqat tozalash
