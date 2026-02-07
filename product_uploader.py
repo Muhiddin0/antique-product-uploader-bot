@@ -979,28 +979,18 @@ HTML:"""
                 print(f"⚠️ Rasm topilmadi: {image_path}")
                 continue
             
-            # Birinchi rasmni thumbnail va product sifatida yuklash
+            # Birinchi rasmni thumbnail va meta_image sifatida yuklash
             if idx == 0:
-                # Asosiy rasm sifatida yuklash (product type - images array uchun)
-                # Bu asosiy rasm bo'lib, images array'ida birinchi o'rinda bo'ladi
-                main_image_name = self.upload_image(image_path, "product")
-                if not main_image_name:
-                    return {"success": False, "error": "Birinchi rasm (asosiy rasm) yuklashda xato"}
-                print(f"✅ Asosiy rasm (product) yuklandi: {main_image_name}")
-                uploaded_images.append(main_image_name)
-                
-                # Thumbnail yuklash (birinchi rasm)
                 thumbnail_name = self.upload_image(image_path, "thumbnail")
                 if not thumbnail_name:
-                    # Agar thumbnail yuklanmasa, asosiy rasm nomidan foydalanish
-                    print(f"⚠️ Thumbnail yuklashda xato, asosiy rasm nomidan foydalanilmoqda: {main_image_name}")
-                    thumbnail_name = main_image_name
-                else:
-                    print(f"✅ Thumbnail yuklandi: {thumbnail_name}")
-                
-                # Meta image uchun thumbnail nomidan foydalanish (bir xil rasm)
+                    return {"success": False, "error": "Birinchi rasm (thumbnail) yuklashda xato"}
                 meta_image_name = thumbnail_name
-                print(f"📸 Jami yuklangan rasmlar: {len(uploaded_images)} ta")
+                
+                # Asosiy rasm sifatida ham yuklash
+                main_image_name = self.upload_image(image_path, "product")
+                if not main_image_name:
+                    main_image_name = thumbnail_name
+                uploaded_images.append(main_image_name)
             else:
                 # Qolgan rasmlarni product sifatida yuklash
                 image_name = self.upload_image(image_path, "product")
@@ -1010,11 +1000,9 @@ HTML:"""
         if not uploaded_images:
             return {"success": False, "error": "Hech qanday rasm yuklanmadi"}
         
-        # Thumbnail va meta_image birinchi rasmdan olinadi (agar yuklanmagan bo'lsa)
-        if not thumbnail_name:
-            thumbnail_name = uploaded_images[0]
-        if not meta_image_name:
-            meta_image_name = thumbnail_name  # Meta image uchun thumbnail nomidan foydalanish
+        # Thumbnail va meta_image birinchi rasmdan olinadi
+        thumbnail_name = uploaded_images[0]
+        meta_image_name = uploaded_images[0]
         
         # Rasm ma'lumotlarini tayyorlash
         images_data = [
