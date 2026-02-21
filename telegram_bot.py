@@ -561,6 +561,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             "Rasmlarni yuborib, keyin 'Rasmlarni tugatish' tugmasini bosing.",
             reply_markup=reply_markup
         )
+        
+        # Conversation handler'ga qayta kirish uchun flag qo'yish
+        # Keyingi message yoki callback conversation handler tomonidan qabul qilinadi
         return WAITING_IMAGE
     
     elif query.data == 'new_store':
@@ -673,7 +676,12 @@ def main():
     
     # Conversation handler
     conv_handler = ConversationHandler(
-        entry_points=[CommandHandler('start', start)],
+        entry_points=[
+            CommandHandler('start', start),
+            # Re-entry uchun new_product va new_store ni entry point qilish
+            CallbackQueryHandler(button_callback, pattern='^new_product$'),
+            CallbackQueryHandler(button_callback, pattern='^new_store$')
+        ],
         states={
             WAITING_EMAIL: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_email),
@@ -700,7 +708,7 @@ def main():
     
     # Handlerlarni qo'shish
     application.add_handler(conv_handler)
-    # ConversationHandler.END holatida ham button callback handler
+    # ConversationHandler.END holatida ham button callback handler (finish va boshqa callback'lar uchun)
     application.add_handler(CallbackQueryHandler(button_callback))
     
     # Botni ishga tushirish
