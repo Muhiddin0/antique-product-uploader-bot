@@ -11,12 +11,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 from typing import Dict, List, Optional, Tuple
-from pathlib import Path
 import random
 import string
-from datetime import datetime
-from html import escape
 from collections import Counter
+
+from typing import Any, Dict, List, Optional
+
 
 # Category selection uchun
 from categories import select_category_brand
@@ -75,6 +75,152 @@ class ProductUploaderAgent:
         except Exception as e:
             print(f"❌ Login xatosi: {str(e)}")
             return False
+
+    def update_product_status(self, product_id: int, status: int = 1) -> bool:
+        """
+        Update product status.
+
+        Args:
+            product_id: Product ID
+            status: Status value (default: 1)
+
+        Returns:
+            bool: True if update successful, False otherwise
+        """
+        if not self.token:
+            return False
+
+        url = f"{self.BASE_URL}/api/v3/seller/products/status-update"
+        payload = {
+            "id": product_id,
+            "status": status,
+            "_method": "put",
+        }
+        try:
+            response = self.session.post(url, json=payload)
+            response.raise_for_status()
+            result = response.json()
+            if response.status_code == 200:
+                return True
+            else:
+                return False
+        except requests.exceptions.HTTPError as e:
+            return False
+        except requests.exceptions.RequestException as e:
+            return False
+        except Exception as e:
+            return False
+
+    def delete_image(
+        self, product_id: int, image_name: str, color: Optional[str] = None
+    ) -> bool:
+        """
+        Delete product image.
+
+        Args:
+            product_id: Product ID
+            image_name: Image name to delete
+            color: Color parameter (default: None, will be sent as "null")
+
+        Returns:
+            bool: True if deletion successful, False otherwise
+        """
+        if not self.token:
+            return False
+
+        url = f"{self.BASE_URL}/api/v3/seller/products/delete-image"
+        params = {
+            "id": product_id,
+            "name": image_name,
+            "color": color if color is not None else "null",
+        }
+        try:
+            response = self.session.get(url, params=params)
+            response.raise_for_status()
+            if response.status_code == 200:
+                return True
+            else:
+                return False
+        except requests.exceptions.HTTPError as e:
+            return False
+        except requests.exceptions.RequestException as e:
+            return False
+        except Exception as e:
+            return False
+
+    def get_product_images(self, product_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Get product images list.
+
+        Args:
+            product_id: Product ID
+
+        Returns:
+            Optional[Dict]: Response containing images and images_full_url, or None if failed
+        """
+        if not self.token:
+            return None
+
+        url = f"{self.BASE_URL}/api/v3/seller/products/get-product-images/{product_id}"
+        try:
+            response = self.session.get(url)
+            response.raise_for_status()
+            result = response.json()
+            return result
+        except requests.exceptions.HTTPError as e:
+            return None
+        except requests.exceptions.RequestException as e:
+            return None
+        except Exception as e:
+            return None
+
+    # Clean images
+    def cleanup_broken_images(self, product_id: int) -> int:
+        """
+        Clean up broken images (path is null and status is 404) for a product.
+
+        Args:
+            product_id: Product ID
+
+        Returns:
+            int: Number of images removed
+        """
+        if not self.token:
+            return 0
+
+        try:
+            # Get product images
+            images_data = self.get_product_images(product_id)
+            if not images_data:
+                return 0
+
+            # Extract images_full_url array
+            images_full_url = images_data.get("images_full_url", [])
+            if not images_full_url:
+                return 0
+
+            # Filter broken images (path is null and status is 404)
+            broken_images = [
+                img
+                for img in images_full_url
+                if img.get("path") is None and img.get("status") == 404
+            ]
+
+            if not broken_images:
+                return 0
+
+            # Delete each broken image
+            removed_count = 0
+            for img in broken_images:
+                image_name = img.get("key")
+                if image_name:
+                    if self.delete_image(product_id, image_name):
+                        removed_count += 1
+
+            return removed_count
+
+        except Exception as e:
+            return 0
 
     def get_categories(self) -> List[Dict]:
         """Kategoriyalarni olish"""
@@ -1253,6 +1399,16 @@ HTML:"""
             if response.status_code == 200:
                 result = response.json()
                 print("✅ Mahsulot muvaffaqiyatli yuklandi!")
+
+                print(result)
+                
+                product_id = result['id']
+
+                print(product_id)
+
+                self.cleanup_broken_images(product_id=product_id)
+                self.update_product_status(product_id=product_id)
+
                 return {
                     "success": True,
                     "message": "Mahsulot muvaffaqiyatli yuklandi!",
@@ -1289,8 +1445,8 @@ HTML:"""
 if __name__ == "__main__":
     # Do'kon ma'lumotlari
     # Iltimos, o'z email va parolingizni kiriting
-    EMAIL = os.getenv("VENU_EMAIL", "your_email@venu.uz")
-    PASSWORD = os.getenv("VENU_PASSWORD", "your_password")
+    EMAIL = "gulis@gmail.com"
+    PASSWORD = "Gulis@gmail.com1"
 
     # Agent yaratish
     agent = ProductUploaderAgent(EMAIL, PASSWORD)
